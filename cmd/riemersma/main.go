@@ -100,7 +100,7 @@ func main() {
 	}
 
 	// dither src image as dst image
-	riemersma := riemersma.NewRiemersmaDither(int(queueSize), ratio)
+	riemersma := riemersma.NewOperation(int(queueSize), ratio)
 	riemersma.Draw(dst, dst.Bounds(), src, src.Bounds().Min)
 
 	// save to output file

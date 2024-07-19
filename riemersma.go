@@ -14,17 +14,18 @@ import (
 	"math"
 )
 
-// Riemersma is a singleton [Drawer] that does Riemersma dithering to src image and draw result on dst image
-var Riemersma = riemersma{}
+// Riemersma is a [draw.Drawer] (similar to [draw.FloydSteinberg]) which does Riemersma dithering to src image and draws result on dst image
+var Riemersma = Drawer{}
 
-type riemersma struct{}
+type Drawer struct{}
 
-func (dr riemersma) Draw(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point) {
-	state := NewRiemersmaDither(16, 16)
-	state.Draw(dst, r, src, sp)
+func (dr Drawer) Draw(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point) {
+	op := NewOperation(16, 16)
+	op.Draw(dst, r, src, sp)
 }
 
-type RiemersmaDither struct {
+// Riemersma Dither Operation. It is not resuable.
+type Op struct {
 	Ratio   float64   // weight ratio between youngest pixel and oldest pixel
 	Weights []float64 // pre-calculated weights
 
@@ -35,8 +36,8 @@ type RiemersmaDither struct {
 // Create new Riemersma dither operation with specific queueSize and ratio
 // queueSize is the number of most recent pixel quantization errors to remember
 // ratio is weight ratio between youngest pixel and oldest pixel
-func NewRiemersmaDither(queueSize int, ratio float64) *RiemersmaDither {
-	return &RiemersmaDither{
+func NewOperation(queueSize int, ratio float64) *Op {
+	return &Op{
 		Ratio:   ratio,
 		Weights: initWeights(queueSize, ratio),
 		errors:  newErrorList(queueSize),
@@ -56,12 +57,12 @@ func initWeights(size int, ratio float64) []float64 {
 	return weights
 }
 
-func (rs *RiemersmaDither) Draw(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point) {
+func (rs *Op) Draw(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point) {
 	image := NewImage(dst, r, src, sp)
 	rs.Dither(image)
 }
 
-func (rs *RiemersmaDither) Dither(image Image) {
+func (rs *Op) Dither(image Image) {
 	/* determine the required order of the Hilbert curve */
 	imgSize := image.Size()
 	sideLength := max(imgSize.X, imgSize.Y)
@@ -76,7 +77,7 @@ func (rs *RiemersmaDither) Dither(image Image) {
 	rs.move(dirNONE, image)
 }
 
-func (rs *RiemersmaDither) hilbertLevel(level int, dir hilbertDirection, image Image) {
+func (rs *Op) hilbertLevel(level int, dir hilbertDirection, image Image) {
 	if level == 1 {
 		switch dir {
 		case dirLEFT:
@@ -134,7 +135,7 @@ func (rs *RiemersmaDither) hilbertLevel(level int, dir hilbertDirection, image I
 	}
 }
 
-func (rs *RiemersmaDither) move(dir hilbertDirection, image Image) {
+func (rs *Op) move(dir hilbertDirection, image Image) {
 	size := image.Size()
 	numChannels := image.ColorNumChannels()
 
@@ -157,7 +158,7 @@ func (rs *RiemersmaDither) move(dir hilbertDirection, image Image) {
 	}
 }
 
-func (rs *RiemersmaDither) AccumulatedError(numChannel int) ColorError {
+func (rs *Op) AccumulatedError(numChannel int) ColorError {
 	acc := make(ColorError, numChannel)
 
 	for i := 0; i < rs.errors.Size(); i++ {
@@ -182,11 +183,11 @@ type Image interface {
 	DitherPixel(x int, y int, accErr ColorError) ColorError // Dither pixel with accumulated error
 }
 
-type AnyImage struct {
-	Dst         draw.Image
-	Dp          image.Point
-	Src         image.Image
-	Sp          image.Point
+type anyImage struct {
+	dst         draw.Image
+	dp          image.Point
+	src         image.Image
+	sp          image.Point
 	size        image.Point
 	numChannels int
 }
@@ -194,44 +195,27 @@ type AnyImage struct {
 func NewImage(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point) Image {
 	srcSize := src.Bounds().Max.Sub(sp)
 	imgSize := image.Pt(min(srcSize.X, r.Dx()), min(srcSize.Y, r.Dy()))
-	return AnyImage{
-		Dst:         dst,
-		Dp:          r.Min,
-		Src:         src,
-		Sp:          sp,
+	return anyImage{
+		dst:         dst,
+		dp:          r.Min,
+		src:         src,
+		sp:          sp,
 		size:        imgSize,
 		numChannels: 4,
 	}
 }
 
-func (img AnyImage) Size() image.Point {
+func (img anyImage) Size() image.Point {
 	return img.size
 }
 
-func (img AnyImage) ColorNumChannels() int {
+func (img anyImage) ColorNumChannels() int {
 	return img.numChannels
 }
 
-func (img AnyImage) DitherPixel(x int, y int, accErr ColorError) ColorError {
-	/*sr, sg, sb, sa :=.RGBA()
-
-	nc := color.RGBA64{
-		R: clamp(int32(sr) + int32(math.Round(accErr[0]))),
-		G: clamp(int32(sg) + int32(math.Round(accErr[1]))),
-		B: clamp(int32(sb) + int32(math.Round(accErr[2]))),
-		A: clamp(int32(sa) + int32(math.Round(accErr[3]))),
-	}
-
-	img.Dst.Set(img.Dp.X+x, img.Dp.Y+y, nc)
-	dr, dg, db, da := img.Dst.At(img.Dp.X+x, img.Dp.Y+y).RGBA()
-	return ColorError{
-		float64(sr) - float64(dr),
-		float64(sg) - float64(dg),
-		float64(sb) - float64(db),
-		float64(sa) - float64(da),
-	}*/
+func (img anyImage) DitherPixel(x int, y int, accErr ColorError) ColorError {
 	// Convert src color to  non-alpha-premultiplied 64-bit color
-	sc := color.NRGBA64Model.Convert(img.Src.At(img.Sp.X+x, img.Sp.Y+y)).(color.NRGBA64)
+	sc := color.NRGBA64Model.Convert(img.src.At(img.sp.X+x, img.sp.Y+y)).(color.NRGBA64)
 
 	// Adjust src color with accummulated quantization errors
 	nc := color.NRGBA64{
@@ -242,10 +226,10 @@ func (img AnyImage) DitherPixel(x int, y int, accErr ColorError) ColorError {
 	}
 
 	// Set new color to destination. The color will be quantized.
-	img.Dst.Set(img.Dp.X+x, img.Dp.Y+y, nc)
+	img.dst.Set(img.dp.X+x, img.dp.Y+y, nc)
 
 	// Convert src color to  non-alpha-premultiplied 64-bit color
-	dc := color.NRGBA64Model.Convert(img.Dst.At(img.Dp.X+x, img.Dp.Y+y)).(color.NRGBA64)
+	dc := color.NRGBA64Model.Convert(img.dst.At(img.dp.X+x, img.dp.Y+y)).(color.NRGBA64)
 
 	return ColorError{
 		float64(sc.R) - float64(dc.R),
